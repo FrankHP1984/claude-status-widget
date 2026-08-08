@@ -1,0 +1,8 @@
+# Ejecucion
+pystray>=0.19.5
+Pillow>=10.0.0
+psutil>=5.9.0
+pywin32>=306
+
+# Desarrollo
+pytest>=8.0.0
