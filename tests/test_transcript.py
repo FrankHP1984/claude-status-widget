@@ -19,8 +19,8 @@ def escribir(path, registros):
 
 class TestEncodeProjectDir:
     def test_codifica_ruta_windows(self):
-        cwd = f"C:{BSLASH}Users{BSLASH}franc"
-        assert transcript.encode_project_dir(cwd) == "C--Users-franc"
+        cwd = f"C:{BSLASH}Users{BSLASH}usuario"
+        assert transcript.encode_project_dir(cwd) == "C--Users-usuario"
 
     def test_codifica_barras_normales(self):
         assert transcript.encode_project_dir("C:/proyectos/app") == "C--proyectos-app"

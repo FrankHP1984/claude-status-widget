@@ -64,7 +64,7 @@ class TestModoAutomatico:
 
 class TestBashWritesOutside:
     def test_escritura_fuera_del_proyecto(self):
-        cmd = "cp datos.txt C:/Users/franc/.claude/settings.json"
+        cmd = "cp datos.txt C:/Users/usuario/.claude/settings.json"
         assert permissions.bash_writes_outside(cmd, CWD) is True
 
     def test_escritura_dentro_del_proyecto(self):
@@ -72,11 +72,11 @@ class TestBashWritesOutside:
         assert permissions.bash_writes_outside(cmd, CWD) is False
 
     def test_sin_orden_de_escritura(self):
-        cmd = "cat C:/Users/franc/.claude/settings.json"
+        cmd = "cat C:/Users/usuario/.claude/settings.json"
         assert permissions.bash_writes_outside(cmd, CWD) is False
 
     def test_redireccion_cuenta_como_escritura(self):
-        cmd = "echo hola > C:/Users/franc/nota.txt"
+        cmd = "echo hola > C:/Users/usuario/nota.txt"
         assert permissions.bash_writes_outside(cmd, CWD) is True
 
     def test_directorio_seguro_excluido(self):
@@ -95,7 +95,7 @@ class TestNeedsPermission:
 
     def test_escritura_fuera_pregunta_aunque_sea_automatico(self, settings):
         s = settings(modo="dontAsk")
-        cmd = "cp a.txt C:/Users/franc/.claude/settings.json"
+        cmd = "cp a.txt C:/Users/usuario/.claude/settings.json"
         assert permissions.needs_permission("Bash", {"command": cmd}, CWD, s) is True
 
     def test_edit_fuera_del_proyecto_no_es_falso_positivo(self, settings):
