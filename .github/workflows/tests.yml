@@ -31,3 +31,18 @@ jobs:
 
       - name: Ejecutar tests
         run: python -m pytest
+
+  plugin-opencode:
+    # El plugin de OpenCode es JavaScript y se prueba con el runner
+    # integrado de Node, sin dependencias adicionales.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Ejecutar tests del plugin
+        run: node --test tests/opencode/plugin.test.mjs

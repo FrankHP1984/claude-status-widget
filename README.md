@@ -1,5 +1,9 @@
 # Claude Status Widget
 
+[![tests](https://github.com/FrankHP1984/claude-status-widget/actions/workflows/tests.yml/badge.svg)](https://github.com/FrankHP1984/claude-status-widget/actions/workflows/tests.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+
 Panel flotante para Windows que muestra, de un vistazo, en qué está cada una de tus
 conversaciones de [Claude Code](https://claude.com/claude-code) abiertas.
 
@@ -144,8 +148,12 @@ con `opencode:`. Para instalarlo, copia el archivo a
 
 ```bash
 pip install -r requirements.txt
-python -m pytest
+python -m pytest                              # paquete Python
+node --test tests/opencode/plugin.test.mjs    # plugin de OpenCode
 ```
+
+Los tests del plugin usan el runner integrado de Node (22 o superior), así que no
+hacen falta dependencias de JavaScript.
 
 La lógica con sustancia vive en el paquete `claude_status_widget/`, cubierta por tests.
 Los archivos de `hooks/` y `widget/` son capas finas encima: el hook solo traduce eventos

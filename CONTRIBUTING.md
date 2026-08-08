@@ -11,8 +11,12 @@ cd claude-status-widget
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-python -m pytest
+python -m pytest                              # paquete Python
+node --test tests/opencode/plugin.test.mjs    # plugin de OpenCode
 ```
+
+Los tests del plugin usan el runner integrado de Node (22 o superior); no hay
+dependencias de JavaScript que instalar.
 
 Necesitas Windows para ejecutar el widget y los tests que tocan procesos o ventanas. La
 lógica pura del paquete `claude_status_widget/` es independiente del sistema salvo
