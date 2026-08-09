@@ -108,6 +108,19 @@ def reconcile_pending(session_id: str, entry: dict, now=None) -> dict:
     if entry.get("state") != WAITING:
         return entry
 
+    # Primera salida: el contexto avanzo desde que empezo la espera.
+    # Mientras se espera de verdad no se consume contexto, asi que un
+    # cambio significa que la conversacion siguio y el permiso se
+    # resolvio. Esto rescata las esperas que se quedaban colgadas para
+    # siempre cuando PostToolUse no llegaba.
+    marca = entry.get("pending_context_pct")
+    actual = entry.get("context_used_pct")
+    if marca is not None and actual is not None and actual != marca:
+        avanzada = dict(entry)
+        avanzada["state"] = WORKING
+        avanzada["detail"] = "Permiso concedido"
+        return avanzada
+
     updated = parse_dt(entry.get("updated_at", ""))
     path = transcript_for(session_id, entry)
     if path is None or updated is None:

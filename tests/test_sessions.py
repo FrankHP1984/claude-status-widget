@@ -261,6 +261,41 @@ class TestSessionMeta:
         assert sessions.session_meta(entrada(context_used_pct=150)) == "100%"
 
 
+class TestEsperaRescatadaPorContexto:
+    """Rescate de la espera que se queda colgada.
+
+    Si PostToolUse no llega y el transcript no se toca, "esperando" no
+    tenia ninguna salida y la fila se quedaba clavada para siempre. El
+    statusline sigue corriendo igualmente, asi que un cambio de contexto
+    delata que la conversacion avanzo.
+    """
+
+    def esperando(self, **kw):
+        base = {"state": "esperando", "detail": "Claude needs your permission"}
+        base.update(kw)
+        return entrada(**base)
+
+    def test_contexto_avanzado_significa_permiso_resuelto(self):
+        e = self.esperando(pending_context_pct=25, context_used_pct=27)
+        r = sessions.reconcile_pending("s", e)
+        assert r["state"] == "trabajando"
+        assert r["detail"] == "Permiso concedido"
+
+    def test_contexto_clavado_sigue_esperando(self):
+        e = self.esperando(pending_context_pct=25, context_used_pct=25)
+        assert sessions.reconcile_pending("s", e)["state"] == "esperando"
+
+    def test_sin_marca_no_se_inventa_nada(self):
+        # Sesion que empezo a esperar antes de que el statusline hubiera
+        # corrido nunca: no hay con que comparar.
+        e = self.esperando(context_used_pct=27)
+        assert sessions.reconcile_pending("s", e)["state"] == "esperando"
+
+    def test_no_toca_los_estados_que_no_esperan(self):
+        e = entrada(state="trabajando", pending_context_pct=25, context_used_pct=99)
+        assert sessions.reconcile_pending("s", e)["state"] == "trabajando"
+
+
 class TestUsagePct:
     """El limite de uso: la bolsa de 5 horas, NO el contexto del chat.
 

@@ -297,6 +297,15 @@ def main() -> None:
     }
     only_if_absent = {"started_at": stamp}
 
+    if state == "esperando":
+        # Foto del contexto al empezar la espera. El statusline sigue
+        # corriendo mientras se espera, asi que si mas tarde el contexto
+        # ha cambiado es que la conversacion avanzo y el permiso se
+        # resolvio, aunque PostToolUse se perdiera por el camino.
+        fields["pending_context_pct"] = existing.get("context_used_pct")
+    elif existing.get("pending_context_pct") is not None:
+        fields["pending_context_pct"] = None
+
     path = transcript.transcript_path(session_id, cwd,
                                       payload.get("transcript_path", ""))
     if path:
