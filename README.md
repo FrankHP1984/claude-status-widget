@@ -57,15 +57,26 @@ El widget no sondea nada: se alimenta de los hooks de Claude Code. Añade a
     "PostToolUse": [
       { "hooks": [{ "type": "command", "command": "python C:/ruta/al/claude-status-widget/hooks/notify_status.py" }] }
     ],
+    "PostToolUseFailure": [
+      { "hooks": [{ "type": "command", "command": "python C:/ruta/al/claude-status-widget/hooks/notify_status.py" }] }
+    ],
     "Notification": [
       { "hooks": [{ "type": "command", "command": "python C:/ruta/al/claude-status-widget/hooks/notify_status.py" }] }
     ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": "python C:/ruta/al/claude-status-widget/hooks/notify_status.py" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "python C:/ruta/al/claude-status-widget/hooks/notify_status.py" }] }
     ]
   }
 }
 ```
+
+Los ocho eventos importan, aunque dos se olviden con facilidad:
+`PostToolUseFailure` es la única señal que llega cuando cancelas un permiso (sin él,
+"esperando" tarda de más en resolverse) y `SessionEnd` es lo que marca el cierre real de
+la terminal, que no es lo mismo que terminar una tarea.
 
 Si ya tienes hooks registrados para esos eventos, añade este como un elemento más del
 array en lugar de sustituir el existente.
@@ -95,6 +106,11 @@ En cada turno, Claude Code entrega dos cosas que conviene no confundir:
 
 Confundir los dos es el error natural aquí: el primero es la bolsa que se agota y te
 obliga a esperar; el segundo se reinicia al abrir un chat nuevo y no tiene nada que ver.
+
+El medidor de consumo depende de que tu Claude Code incluya `rate_limits` en ese payload.
+Está verificado en la versión 2.1.226 con cuenta de suscripción; no se garantiza en
+versiones anteriores ni usando API key, Bedrock o Vertex. Si el campo no llega, la
+cabecera se queda vacía en lugar de romperse, y las filas siguen mostrando su contexto.
 
 El mismo script imprime una línea de estado corta (`[Modelo] 42% usado`) en la terminal;
 si quieres otra línea de estado, sustituye el script por uno que además escriba el
