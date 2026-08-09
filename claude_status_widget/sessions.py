@@ -18,7 +18,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import transcript
+from . import state_store, transcript
 
 # Sin actividad durante mas de esto, la sesion se considera obsoleta.
 STALE_SECONDS = 60 * 60 * 6
@@ -177,3 +177,109 @@ def confirm_pending(sessions: list, pending_since: dict, monotonic_now: float) -
         pending_since.pop(session_id, None)
 
     return confirmed
+
+
+def current_context_pct(data: dict, pid_exists, now=None) -> int | None:
+    """Porcentaje de contexto GASTADO de la sesion actual de Claude.
+
+    La sesion "actual" es la visible con el evento mas reciente que tenga
+    medidor: el statusline lo escribe como `context_used_pct` en cada
+    turno. None si ninguna sesion visible lo ha reportado todavia
+    (p.ej. OpenCode o sesiones recien abiertas).
+    """
+    for _, entry in visible_sessions(data, pid_exists, now):
+        raw = entry.get("context_used_pct")
+        if raw is None:
+            continue
+        try:
+            pct = int(raw)
+        except (TypeError, ValueError):
+            continue
+        return max(0, min(100, pct))
+    return None
+
+
+def _clamp_pct(raw) -> int | None:
+    if raw is None:
+        return None
+    try:
+        return max(0, min(100, int(raw)))
+    except (TypeError, ValueError):
+        return None
+
+
+def usage_pct(data: dict) -> int | None:
+    """Consumo del limite de uso: la bolsa que se resetea cada 5 horas.
+
+    Es LO QUE SE MUESTRA EN LA CABECERA, y no tiene nada que ver con el
+    contexto de una conversacion: aquel mide cuanto ocupa un chat, este
+    cuanto has gastado de tu cuota sumando todos. Lo entrega el propio
+    Claude Code (`rate_limits.five_hour`), asi que cuadra con /usage.
+    """
+    return _clamp_pct(account(data).get("five_hour_pct"))
+
+
+def weekly_pct(data: dict) -> int | None:
+    """Consumo de la ventana semanal, por si se quiere mostrar."""
+    return _clamp_pct(account(data).get("seven_day_pct"))
+
+
+def account(data: dict) -> dict:
+    """Entrada de cuenta del almacen; vacia si aun no se ha escrito."""
+    return data.get(state_store.ACCOUNT_KEY) or {}
+
+
+def resets_label(data: dict, now=None) -> str:
+    """Cuanto queda para que la bolsa de 5 horas se reponga: "3h12m".
+
+    Vacio si no hay dato o si la marca ya paso (el statusline aun no ha
+    corrido tras el reseteo).
+    """
+    epoch = account(data).get("five_hour_resets_at")
+    if epoch is None:
+        return ""
+    try:
+        resets = datetime.fromtimestamp(int(epoch), timezone.utc)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return ""
+    now = now or datetime.now(timezone.utc)
+    seconds = int((resets - now).total_seconds())
+    if seconds <= 0:
+        return ""
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    return f"{minutes // 60}h{minutes % 60:02d}m"
+
+
+def context_pct(entry: dict) -> int | None:
+    """Contexto gastado de UNA sesion, acotado a 0-100.
+
+    A diferencia de `current_context_pct`, que ademas decide cual es la
+    sesion actual, aqui el llamante ya sabe de que sesion habla.
+    """
+    raw = entry.get("context_used_pct")
+    if raw is None:
+        return None
+    try:
+        pct = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return max(0, min(100, pct))
+
+
+def session_meta(entry: dict) -> str:
+    """Modelo y contexto propios de la fila: "Opus 5 · 7%".
+
+    Los dos datos son opcionales y los escribe el statusline, que no ha
+    corrido todavia en una sesion recien abierta; las sesiones de
+    OpenCode no los reportan nunca.
+    """
+    parts = []
+    model = str(entry.get("model") or "").strip()
+    if model:
+        parts.append(model)
+    pct = context_pct(entry)
+    if pct is not None:
+        parts.append(f"{pct}%")
+    return " · ".join(parts)

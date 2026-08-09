@@ -14,6 +14,8 @@ en una fila, salta directamente a la pestaña de terminal correspondiente.
 
 - **Semáforo por sesión** — iniciado, trabajando, esperando permiso, terminado.
 - **Título real de la conversación** — el primer mensaje que escribiste, no uno intermedio.
+- **Medidor de consumo** — cuánto llevas gastado del límite de uso que se repone cada 5 horas, y cuánto falta para que se reponga, junto a "Sesiones activas". Es el mismo número que da `/usage`.
+- **Modelo y contexto por fila** — cada conversación muestra con qué modelo corre y cuánto ocupa su ventana de contexto.
 - **Clic para saltar** — enfoca la ventana y cambia a la pestaña de Windows Terminal.
 - **Aviso sonoro opcional** — al terminar una tarea o al quedarse esperando permiso.
 - **Solo conversaciones reales** — las sesiones internas (subagentes, resúmenes) se descartan.
@@ -68,11 +70,54 @@ El widget no sondea nada: se alimenta de los hooks de Claude Code. Añade a
 Si ya tienes hooks registrados para esos eventos, añade este como un elemento más del
 array en lugar de sustituir el existente.
 
+### Los medidores (statusline)
+
+Tanto el consumo del límite de uso como el contexto llegan por el **statusline** de
+Claude Code, no por los hooks de eventos. Añade esta clave a `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "python C:/ruta/al/claude-status-widget/hooks/notify_status.py"
+  }
+}
+```
+
+En cada turno, Claude Code entrega dos cosas que conviene no confundir:
+
+- `rate_limits.five_hour` — **cuánto llevas gastado de tu cuota**, sumando todas tus
+  conversaciones, y el momento en que se repone. Es un dato de cuenta, idéntico en todas
+  las sesiones, así que se guarda una sola vez bajo la clave `_account`. **Esto es lo que
+  sale en la cabecera.**
+- `context_window.used_percentage` — **cuánto ocupa una conversación concreta** de su
+  ventana de contexto. Se guarda en la sesión correspondiente y se muestra en su fila.
+
+Confundir los dos es el error natural aquí: el primero es la bolsa que se agota y te
+obliga a esperar; el segundo se reinicia al abrir un chat nuevo y no tiene nada que ver.
+
+El mismo script imprime una línea de estado corta (`[Modelo] 42% usado`) en la terminal;
+si quieres otra línea de estado, sustituye el script por uno que además escriba el
+mismo JSON.
+
 ### Arrancar el widget
 
 ```bash
 python widget/app.py
 ```
+
+#### Acceso directo en el escritorio
+
+Para tenerlo a mano sin abrir una terminal, genera el icono y crea el acceso directo:
+
+```bash
+python assets/make_icon.py          # genera assets/widget.ico
+powershell -File tools/crear-acceso-directo.ps1
+```
+
+Apunta a `pythonw.exe` en vez de a `python.exe`, así que **no deja una ventana de consola
+abierta** detrás del panel. Si lo lanzas dos veces no se duplica: el segundo proceso
+detecta que ya hay un panel y se cierra solo.
 
 Aparece un icono en la bandeja del sistema y el panel en la esquina superior derecha.
 El panel se arrastra a donde quieras; desde el icono de la bandeja puedes silenciar los
@@ -101,10 +146,33 @@ Cada entrada del estado tiene esta forma:
     "source": "claude",
     "interactive": true,
     "focus_pid": 1111,
-    "shell_pid": 2222
+    "shell_pid": 2222,
+    "model": "Opus 5",
+    "context_used_pct": 15,
+    "context_remaining_pct": 85,
+    "context_checked_at": "2026-01-01T11:59:00+00:00"
+  },
+  "_account": {
+    "five_hour_pct": 22,
+    "five_hour_resets_at": 1786291200,
+    "seven_day_pct": 38,
+    "seven_day_resets_at": 1786680000,
+    "updated_at": "2026-01-01T12:00:00+00:00"
   }
 }
 ```
+
+`_account` no es una sesión: guarda el consumo de la **cuenta**, que es idéntico en todas
+las conversaciones. Vive aparte precisamente por eso — cuando el dato se guardaba por
+sesión, la cabecera acababa enseñando el número de una terminal cualquiera. No lleva
+`interactive`, así que nunca se pinta como una fila. Las marcas `resets_at` vienen en
+epoch (segundos UTC).
+
+`model`, `context_used_pct` y `context_remaining_pct` los escribe el statusline y no los
+tocan el resto de eventos. Se muestran en la fila de cada sesión.
+
+La cabecera muestra `five_hour_pct`, coloreado: verde por debajo del 50 %, ámbar entre
+50 y 80 % y rojo por encima del 80 %, con el tiempo que falta para reponerse al lado.
 
 Tres decisiones de diseño merecen explicación:
 

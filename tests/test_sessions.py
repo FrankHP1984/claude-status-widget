@@ -181,3 +181,149 @@ class TestConfirmPending:
         sessions.confirm_pending([("s1", {"state": "trabajando"})], pendientes, 101.0)
         r = sessions.confirm_pending(self.ESPERA, pendientes, 102.0)
         assert r[0][1]["state"] == "trabajando"
+
+
+class TestCurrentContextPct:
+    """El medidor de contexto (statusline) de la sesion mas reciente."""
+
+    def test_devuelve_el_de_la_sesion_mas_reciente(self):
+        data = {
+            "antigua": entrada(
+                updated_at=(AHORA - timedelta(minutes=10)).isoformat(),
+                context_used_pct=10,
+            ),
+            "reciente": entrada(updated_at=AHORA.isoformat(), context_used_pct=85),
+        }
+        assert sessions.current_context_pct(data, VIVO, AHORA) == 85
+
+    def test_sin_medidor_devuelve_none(self):
+        assert sessions.current_context_pct({"s": entrada()}, VIVO, AHORA) is None
+
+    def test_ignora_sesiones_no_visibles(self):
+        data = {
+            "interna": entrada(interactive=False, context_used_pct=50),
+            "muerta": entrada(shell_pid=999, context_used_pct=50),
+        }
+        assert sessions.current_context_pct(data, MUERTO, AHORA) is None
+
+    def test_prioriza_la_con_medidor_aunque_haya_otra_mas_nueva(self):
+        data = {
+            "nueva_sin": entrada(updated_at=AHORA.isoformat()),
+            "con": entrada(
+                updated_at=(AHORA - timedelta(seconds=30)).isoformat(),
+                context_used_pct=40,
+            ),
+        }
+        assert sessions.current_context_pct(data, VIVO, AHORA) == 40
+
+    def test_ignora_porcentajes_invalidos(self):
+        data = {
+            "rara": entrada(context_used_pct="no es numero"),
+            "buena": entrada(context_used_pct=72),
+        }
+        assert sessions.current_context_pct(data, VIVO, AHORA) == 72
+
+    def test_acota_fuera_de_rango(self):
+        data = {"rara": entrada(context_used_pct=150)}
+        assert sessions.current_context_pct(data, VIVO, AHORA) == 100
+        data = {"rara": entrada(context_used_pct=-5)}
+        assert sessions.current_context_pct(data, VIVO, AHORA) == 0
+
+
+class TestSessionMeta:
+    """Modelo y contexto de la fila, cada uno opcional por separado."""
+
+    def test_modelo_y_contexto(self):
+        e = entrada(model="Opus 5", context_used_pct=7)
+        assert sessions.session_meta(e) == "Opus 5 · 7%"
+
+    def test_solo_modelo(self):
+        assert sessions.session_meta(entrada(model="Haiku 4.5")) == "Haiku 4.5"
+
+    def test_solo_contexto(self):
+        assert sessions.session_meta(entrada(context_used_pct=42)) == "42%"
+
+    def test_sin_ninguno_de_los_dos(self):
+        # Fila de OpenCode: nunca reporta ni modelo ni medidor.
+        assert sessions.session_meta(entrada(source="opencode")) == ""
+
+    def test_cero_por_ciento_se_muestra(self):
+        # 0 es falsy: si se filtrara por verdad, desapareceria.
+        assert sessions.session_meta(entrada(context_used_pct=0)) == "0%"
+
+    def test_modelo_vacio_o_solo_espacios_se_ignora(self):
+        assert sessions.session_meta(entrada(model="   ", context_used_pct=5)) == "5%"
+
+    def test_contexto_invalido_se_ignora(self):
+        assert sessions.session_meta(entrada(model="Opus 5", context_used_pct="ns")) == "Opus 5"
+
+    def test_acota_fuera_de_rango(self):
+        assert sessions.session_meta(entrada(context_used_pct=150)) == "100%"
+
+
+class TestUsagePct:
+    """El limite de uso: la bolsa de 5 horas, NO el contexto del chat.
+
+    Es un dato de cuenta y vive en `_account`, no en cada sesion: eso es
+    justo lo que evita el baile de numeros que tenia la cabecera.
+    """
+
+    def cuenta(self, **kw):
+        base = {"five_hour_pct": 22, "seven_day_pct": 38}
+        base.update(kw)
+        return {"_account": base, "s1": entrada(context_used_pct=7)}
+
+    def test_lee_la_ventana_de_cinco_horas(self):
+        assert sessions.usage_pct(self.cuenta()) == 22
+
+    def test_no_lo_confunde_con_el_contexto_de_la_sesion(self):
+        # La sesion visible va por 7%: la cabecera debe ignorarlo.
+        assert sessions.usage_pct(self.cuenta()) != 7
+
+    def test_semanal(self):
+        assert sessions.weekly_pct(self.cuenta()) == 38
+
+    def test_sin_datos_de_cuenta(self):
+        assert sessions.usage_pct({"s1": entrada()}) is None
+
+    def test_cero_por_ciento(self):
+        assert sessions.usage_pct(self.cuenta(five_hour_pct=0)) == 0
+
+    def test_acota_y_descarta_basura(self):
+        assert sessions.usage_pct(self.cuenta(five_hour_pct=150)) == 100
+        assert sessions.usage_pct(self.cuenta(five_hour_pct="ns")) is None
+
+    def test_la_cuenta_no_se_pinta_como_fila(self):
+        # `_account` no es interactive, asi que nunca aparece en el panel.
+        visibles = sessions.visible_sessions(self.cuenta(), VIVO, AHORA)
+        assert [sid for sid, _ in visibles] == ["s1"]
+
+
+class TestResetsLabel:
+    def etiqueta(self, segundos):
+        epoch = int((AHORA + timedelta(seconds=segundos)).timestamp())
+        data = {"_account": {"five_hour_resets_at": epoch}}
+        return sessions.resets_label(data, AHORA)
+
+    @pytest.mark.parametrize("segundos,esperado", [
+        (600, "10m"), (3600, "1h00m"), (11520, "3h12m"),
+    ])
+    def test_formatos(self, segundos, esperado):
+        assert self.etiqueta(segundos) == esperado
+
+    def test_ya_pasado_no_se_muestra(self):
+        assert self.etiqueta(-60) == ""
+
+    def test_sin_dato(self):
+        assert sessions.resets_label({}, AHORA) == ""
+
+    def test_basura(self):
+        assert sessions.resets_label({"_account": {"five_hour_resets_at": "ns"}}, AHORA) == ""
+
+
+class TestContextPct:
+    def test_devuelve_none_sin_medidor(self):
+        assert sessions.context_pct(entrada()) is None
+
+    def test_lee_solo_la_suya_sin_resolver_sesion_actual(self):
+        assert sessions.context_pct(entrada(context_used_pct=33)) == 33

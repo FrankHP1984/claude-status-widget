@@ -16,6 +16,9 @@ from pathlib import Path
 
 import psutil
 import pystray
+import win32api
+import win32event
+import winerror
 from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -187,6 +190,17 @@ def _aggregate_color(visibles: list) -> str:
     return DEFAULT_ACCENT
 
 
+def _context_color(pct: int | None) -> str:
+    """Color del medidor de contexto gastado: verde con margen, ambar cerca, rojo al filo."""
+    if pct is None:
+        return TEXT_SECONDARY
+    if pct >= 80:
+        return ACCENT["error"]
+    if pct >= 50:
+        return ACCENT["esperando"]
+    return ACCENT["trabajando"]
+
+
 def _make_dot_image(color: str, size: int = 64) -> Image.Image:
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -216,6 +230,7 @@ class StatusWidget:
         self._editing = None
         self._last_states = None
         self._last_signature = None
+        self._last_pct = None
         self._pending_since = {}
         self.settings = load_settings()
         saved_pos = self.settings.get("panel_pos")
@@ -262,6 +277,15 @@ class StatusWidget:
         )
         self.count_badge.pack(side="left")
 
+        # Medidor de contexto de la sesion actual de Claude: porcentaje de
+        # contexto gastado, tal y como lo calcula el propio Claude Code
+        # (statusline). Vacio si ninguna sesion lo reporta.
+        self.context_label = tk.Label(
+            header, text="", bg=BG_HEADER, fg=TEXT_SECONDARY,
+            font=self.font_small_bold,
+        )
+        self.context_label.pack(side="left", padx=(10, 0))
+
         close_btn = tk.Label(
             header, text="✕", bg=BG_HEADER, fg=TEXT_MUTED,
             font=("Segoe UI", 11), cursor="hand2", padx=6,
@@ -271,7 +295,7 @@ class StatusWidget:
         close_btn.bind("<Enter>", lambda e: close_btn.config(fg=TEXT_PRIMARY))
         close_btn.bind("<Leave>", lambda e: close_btn.config(fg=TEXT_MUTED))
 
-        for widget in (header, title, self.count_badge):
+        for widget in (header, title, self.count_badge, self.context_label):
             widget.bind("<ButtonPress-1>", self._start_move)
             widget.bind("<B1-Motion>", self._do_move)
             widget.bind("<ButtonRelease-1>", self._end_move)
@@ -432,11 +456,18 @@ class StatusWidget:
         if source_tag:
             status_text = f"{source_tag} · {status_text}"
 
+        # A la derecha de la pastilla: modelo, contexto propio de esta
+        # sesion y tiempo transcurrido. Si no cabe entero se van cayendo
+        # campos por el final, que es lo menos valioso.
+        meta = sessions.session_meta(entry)
+        right_text = " · ".join(p for p in (meta, elapsed) if p)
+
         width = PANEL_W - 2 * PAD
         full_width = width - TEXT_LEFT - TEXT_RIGHT_MARGIN
         status_width = self.font_small_bold.measure(status_text)
-        elapsed_width = self.font_small.measure(elapsed) if elapsed else 0
         line3_left_width = full_width - status_width - 16
+        while right_text and self.font_small.measure(right_text) >= line3_left_width:
+            right_text = right_text.rpartition(" · ")[0]
 
         label = _fit_text(self.font_title, raw_label, full_width)
         detail = _fit_text(self.font_body, raw_detail, full_width)
@@ -489,10 +520,10 @@ class StatusWidget:
             TEXT_LEFT + pill_pad, pill_y + pill_h // 2, anchor="w",
             text=status_text, fill=color, font=self.font_small_bold,
         )
-        if elapsed and elapsed_width < line3_left_width:
+        if right_text:
             row.create_text(
                 width - TEXT_RIGHT_MARGIN, pill_y + pill_h // 2, anchor="e",
-                text=elapsed, fill=TEXT_MUTED, font=self.font_small,
+                text=right_text, fill=TEXT_MUTED, font=self.font_small,
             )
 
     def _confirm_pending(self, visibles: list) -> list:
@@ -518,6 +549,9 @@ class StatusWidget:
                 entry.get("detail"),
                 _session_label(sid, entry),
                 _elapsed_label(entry.get("started_at", "")),
+                # Sin esto la fila no se repinta al cambiar de modelo ni
+                # al avanzar su medidor de contexto.
+                sessions.session_meta(entry),
             )
             for sid, entry in visibles
         )
@@ -525,8 +559,22 @@ class StatusWidget:
     def _refresh_loop(self):
         # El sonido y el repintado usan ya el estado confirmado, asi que
         # una espera fugaz nunca llega a verse ni a oirse.
-        visibles = self._confirm_pending(_active_sessions())
+        data = state_store.load()
+        visibles = self._confirm_pending(sessions.visible_sessions(data, psutil.pid_exists))
         self._announce_changes(visibles)
+
+        # La cabecera muestra el consumo del limite de uso (la bolsa de
+        # 5 horas), no el contexto de ninguna conversacion: es el numero
+        # que cuadra con /usage. El contexto vive en cada fila.
+        pct = sessions.usage_pct(data)
+        resets = sessions.resets_label(data)
+        if (pct, resets) != self._last_pct:
+            self._last_pct = (pct, resets)
+            if pct is None:
+                text = ""
+            else:
+                text = f"{pct}%" + (f" · {resets}" if resets else "")
+            self.context_label.config(text=text, fg=_context_color(pct))
 
         signature = self._signature(visibles)
         # Mientras se renombra no se repinta: destruiria el campo de texto.
@@ -583,7 +631,27 @@ class StatusWidget:
         self.root.mainloop()
 
 
+# Con un acceso directo en el escritorio es facil hacer doble clic dos
+# veces y acabar con dos paneles superpuestos leyendo el mismo archivo.
+# El mutex vive mientras viva el proceso y lo libera Windows al morir.
+SINGLE_INSTANCE_MUTEX = "claude-status-widget-panel"
+_mutex_handle = None
+
+
+def _already_running() -> bool:
+    global _mutex_handle
+    try:
+        _mutex_handle = win32event.CreateMutex(None, False, SINGLE_INSTANCE_MUTEX)
+        return win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS
+    except Exception:
+        # Sin mutex se arranca igual: es una comodidad, no un requisito.
+        return False
+
+
 def main():
+    if _already_running():
+        print("El panel ya esta abierto (mira el icono de la bandeja).")
+        return
     StatusWidget().run()
 
 

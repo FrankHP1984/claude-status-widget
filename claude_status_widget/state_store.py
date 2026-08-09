@@ -21,6 +21,11 @@ STALE_SECONDS = 60 * 60 * 6  # 6 horas
 # Tope de sesiones guardadas en disco.
 MAX_ENTRIES = 50
 
+# Entrada que no es una sesion: guarda datos de la CUENTA (el consumo
+# del limite de uso), identicos para todas las conversaciones. No lleva
+# `interactive`, asi que `visible_sessions` nunca la pinta como fila.
+ACCOUNT_KEY = "_account"
+
 
 def _ensure_dir() -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
