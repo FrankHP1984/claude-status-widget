@@ -293,6 +293,31 @@ class TestUsagePct:
         assert sessions.usage_pct(self.cuenta(five_hour_pct=150)) == 100
         assert sessions.usage_pct(self.cuenta(five_hour_pct="ns")) is None
 
+    def test_caduca_cuando_la_ventana_ya_se_repuso(self):
+        # El statusline solo escribe cuando usas Claude: si la bolsa se
+        # repone mientras no la usas, el valor viejo mentiria.
+        pasado = int((AHORA - timedelta(minutes=1)).timestamp())
+        data = self.cuenta(five_hour_pct=80, five_hour_resets_at=pasado)
+        assert sessions.usage_pct(data, AHORA) == 0
+
+    def test_no_caduca_antes_de_la_reposicion(self):
+        futuro = int((AHORA + timedelta(hours=2)).timestamp())
+        data = self.cuenta(five_hour_pct=80, five_hour_resets_at=futuro)
+        assert sessions.usage_pct(data, AHORA) == 80
+
+    def test_sin_marca_de_reposicion_no_caduca(self):
+        assert sessions.usage_pct(self.cuenta(five_hour_pct=80), AHORA) == 80
+
+    def test_la_semanal_caduca_por_su_cuenta(self):
+        # Cada ventana tiene su propia marca: que se reponga la de 5
+        # horas no significa que se reponga la de 7 dias.
+        data = self.cuenta(
+            five_hour_resets_at=int((AHORA - timedelta(minutes=1)).timestamp()),
+            seven_day_resets_at=int((AHORA + timedelta(days=3)).timestamp()),
+        )
+        assert sessions.usage_pct(data, AHORA) == 0
+        assert sessions.weekly_pct(data, AHORA) == 38
+
     def test_la_cuenta_no_se_pinta_como_fila(self):
         # `_account` no es interactive, asi que nunca aparece en el panel.
         visibles = sessions.visible_sessions(self.cuenta(), VIVO, AHORA)

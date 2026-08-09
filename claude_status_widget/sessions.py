@@ -208,20 +208,53 @@ def _clamp_pct(raw) -> int | None:
         return None
 
 
-def usage_pct(data: dict) -> int | None:
+def _epoch_dt(epoch):
+    """Marca epoch (segundos UTC) a datetime, o None si no es valida."""
+    if epoch is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(epoch), timezone.utc)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def _window_expired(epoch, now=None) -> bool:
+    """La ventana ya se repuso, asi que el consumo guardado caduco.
+
+    El consumo solo se reescribe cuando corre el statusline, es decir,
+    cuando usas Claude. Si la bolsa se repone mientras no la usas, el
+    ultimo valor visto se queda congelado y mentiria hasta el proximo
+    mensaje. Pasada la marca de reposicion se da por caducado.
+    """
+    resets = _epoch_dt(epoch)
+    if resets is None:
+        return False
+    return (now or datetime.now(timezone.utc)) >= resets
+
+
+def usage_pct(data: dict, now=None) -> int | None:
     """Consumo del limite de uso: la bolsa que se resetea cada 5 horas.
 
     Es LO QUE SE MUESTRA EN LA CABECERA, y no tiene nada que ver con el
     contexto de una conversacion: aquel mide cuanto ocupa un chat, este
     cuanto has gastado de tu cuota sumando todos. Lo entrega el propio
     Claude Code (`rate_limits.five_hour`), asi que cuadra con /usage.
+
+    Cero si la ventana ya se repuso: es lo cierto hasta que el proximo
+    turno traiga una medida nueva.
     """
-    return _clamp_pct(account(data).get("five_hour_pct"))
+    acc = account(data)
+    if _window_expired(acc.get("five_hour_resets_at"), now):
+        return 0
+    return _clamp_pct(acc.get("five_hour_pct"))
 
 
-def weekly_pct(data: dict) -> int | None:
+def weekly_pct(data: dict, now=None) -> int | None:
     """Consumo de la ventana semanal, por si se quiere mostrar."""
-    return _clamp_pct(account(data).get("seven_day_pct"))
+    acc = account(data)
+    if _window_expired(acc.get("seven_day_resets_at"), now):
+        return 0
+    return _clamp_pct(acc.get("seven_day_pct"))
 
 
 def account(data: dict) -> dict:
@@ -235,12 +268,8 @@ def resets_label(data: dict, now=None) -> str:
     Vacio si no hay dato o si la marca ya paso (el statusline aun no ha
     corrido tras el reseteo).
     """
-    epoch = account(data).get("five_hour_resets_at")
-    if epoch is None:
-        return ""
-    try:
-        resets = datetime.fromtimestamp(int(epoch), timezone.utc)
-    except (TypeError, ValueError, OSError, OverflowError):
+    resets = _epoch_dt(account(data).get("five_hour_resets_at"))
+    if resets is None:
         return ""
     now = now or datetime.now(timezone.utc)
     seconds = int((resets - now).total_seconds())
