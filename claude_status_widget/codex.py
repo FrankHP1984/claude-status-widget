@@ -74,7 +74,7 @@ def _texto(payload: dict) -> str:
 
 def leer_cabecera(ruta: Path) -> dict:
     """Metadata y titulo: primera linea y primeros mensajes del usuario."""
-    datos = {"cwd": "", "origen": "", "title": ""}
+    datos = {"cwd": "", "origen": "", "title": "", "humana": None}
     try:
         with open(ruta, encoding="utf-8", errors="replace") as f:
             for i, linea in enumerate(f):
@@ -86,7 +86,17 @@ def leer_cabecera(ruta: Path) -> dict:
                 payload = d.get("payload") or {}
                 if d.get("type") == "session_meta":
                     datos["cwd"] = payload.get("cwd", "") or ""
-                    datos["origen"] = payload.get("originator", "") or payload.get("source", "") or ""
+                    origen = payload.get("originator", "") or payload.get("source", "")
+                    datos["origen"] = origen if isinstance(origen, str) else ""
+                    # Codex abre un rollout propio por cada subagente que
+                    # lanza, con el mismo cwd y el mismo aspecto que una
+                    # conversacion. `thread_source` es lo que los separa:
+                    # 'user' es lo que escribiste tu, 'subagent' es suyo.
+                    hilo = payload.get("thread_source")
+                    if hilo is not None:
+                        datos["humana"] = hilo == "user"
+                    elif payload.get("parent_thread_id"):
+                        datos["humana"] = False
                 elif not datos["title"] and payload.get("type") == "user_message":
                     texto = _texto(payload).strip()
                     # Los mensajes que abren con '<' son plantillas del
@@ -179,10 +189,11 @@ def leer_sesiones(base=None, now=None) -> dict:
             "title": cabecera["title"] or ruta.stem,
             "cwd": cabecera["cwd"],
             "source": "codex",
-            # Mismo criterio que con Claude Code: sin un mensaje escrito
-            # a mano no es una conversacion de una persona, sino un
-            # resumen o una sesion interna, y no se pinta.
-            "interactive": bool(cabecera["title"]),
+            # Manda `thread_source`; si esa version de Codex no lo
+            # escribe, se cae al criterio de siempre: sin mensaje a mano
+            # no es una conversacion de una persona.
+            "interactive": (cabecera["humana"] if cabecera["humana"] is not None
+                            else bool(cabecera["title"])),
             "updated_at": mtime.isoformat(),
             "started_at": _inicio(ruta, mtime),
         }

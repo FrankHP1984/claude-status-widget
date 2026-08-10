@@ -23,8 +23,10 @@ def escribir(directorio: Path, nombre: str, lineas: list) -> Path:
     return ruta
 
 
-def meta(cwd="c:/p/demo", origen="codex_vscode"):
-    return {"type": "session_meta", "payload": {"cwd": cwd, "originator": origen}}
+def meta(cwd="c:/p/demo", origen="codex_vscode", **extra):
+    payload = {"cwd": cwd, "originator": origen, "thread_source": "user"}
+    payload.update(extra)
+    return {"type": "session_meta", "payload": payload}
 
 
 def evento(tipo, **kw):
@@ -93,9 +95,30 @@ class TestLeerSesiones:
         assert entrada["source"] == "codex"
         assert "VS Code" in entrada["detail"]
 
-    def test_la_sesion_interna_no_se_pinta(self, tmp_path):
-        # Sin mensaje escrito a mano: resumen o sesion de sistema.
-        escribir(tmp_path, "2026-08-10T10-00-00-abc", [meta(), evento("task_started")])
+    def test_el_subagente_no_se_pinta(self, tmp_path):
+        # Codex abre un rollout por cada subagente que lanza, identico a
+        # una conversacion salvo por thread_source. Es la causa de que
+        # salieran dos filas teniendo una sola sesion abierta.
+        escribir(tmp_path, "2026-08-10T10-00-00-abc", [
+            meta(thread_source="subagent", parent_thread_id="019fead9"),
+            evento("user_message", message="valida esta skill"),
+        ])
+        entrada = list(codex.leer_sesiones(base=tmp_path).values())[0]
+        assert entrada["interactive"] is False
+
+    def test_el_hilo_del_usuario_si_se_pinta(self, tmp_path):
+        escribir(tmp_path, "2026-08-10T10-00-00-abc", [
+            meta(thread_source="user"), evento("user_message", message="hola"),
+        ])
+        entrada = list(codex.leer_sesiones(base=tmp_path).values())[0]
+        assert entrada["interactive"] is True
+
+    def test_sin_thread_source_se_cae_al_titulo(self, tmp_path):
+        # Versiones de Codex que no escriben el campo.
+        escribir(tmp_path, "2026-08-10T10-00-00-abc", [
+            {"type": "session_meta", "payload": {"cwd": "c:/p/demo"}},
+            evento("task_started"),
+        ])
         entrada = list(codex.leer_sesiones(base=tmp_path).values())[0]
         assert entrada["interactive"] is False
 
