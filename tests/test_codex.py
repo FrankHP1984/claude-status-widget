@@ -33,7 +33,17 @@ def evento(tipo, **kw):
     return {"type": "event_msg", "payload": dict(type=tipo, **kw)}
 
 
+def llamada(escalada=False, salida=False):
+    """Llamada a herramienta, opcionalmente pidiendo escalar permisos."""
+    args = '{"command":"ls","sandbox_permissions":"require_escalated"}' if escalada else '{"command":"ls"}'
+    if salida:
+        return {"type": "response_item", "payload": {"type": "function_call_output", "output": "ok"}}
+    return {"type": "response_item", "payload": {"type": "function_call", "arguments": args}}
+
+
 class TestEstado:
+    """Los tres escenarios: empieza, termina y pide permiso."""
+
     def test_turno_abierto_es_trabajando(self, tmp_path):
         r = escribir(tmp_path, "a", [meta(), evento("task_started")])
         assert codex.leer_estado(r) == "trabajando"
@@ -54,6 +64,48 @@ class TestEstado:
             *[evento("token_count") for _ in range(50)],
         ])
         assert codex.leer_estado(r) == "trabajando"
+
+    def test_llamada_pendiente_de_escalada_es_esperando(self, tmp_path):
+        r = escribir(tmp_path, "a", [
+            meta(), evento("task_started"), llamada(escalada=True),
+        ])
+        assert codex.leer_estado(r) == "esperando"
+
+    def test_escalada_ya_resuelta_vuelve_a_trabajando(self, tmp_path):
+        r = escribir(tmp_path, "a", [
+            meta(), evento("task_started"), llamada(escalada=True), llamada(salida=True),
+        ])
+        assert codex.leer_estado(r) == "trabajando"
+
+    def test_llamada_normal_no_es_esperando(self, tmp_path):
+        r = escribir(tmp_path, "a", [meta(), evento("task_started"), llamada()])
+        assert codex.leer_estado(r) == "trabajando"
+
+    def test_sin_turno_abierto_no_hay_espera(self, tmp_path):
+        # Escalada colgada pero el turno ya cerro: manda el turno.
+        r = escribir(tmp_path, "a", [
+            meta(), evento("task_started"), llamada(escalada=True), evento("task_complete"),
+        ])
+        assert codex.leer_estado(r) == "terminado"
+
+    def test_turno_enterrado_bajo_megas_de_actividad(self, tmp_path):
+        """El fallo real: leer solo el final del archivo daba terminado.
+
+        Una sesion larga escribe megas de razonamiento y llamadas
+        despues del `task_started`, asi que en la cola no queda ningun
+        evento de turno y la sesion viva se veia como terminada.
+        """
+        relleno = [evento("reasoning", text="x" * 2000) for _ in range(2000)]
+        r = escribir(tmp_path, "a", [meta(), evento("task_started"), *relleno])
+        assert r.stat().st_size > 4 * 1024 * 1024 // 2
+        assert codex.leer_estado(r) == "trabajando"
+
+    def test_archivo_gigante_ya_terminado(self, tmp_path):
+        relleno = [evento("reasoning", text="x" * 2000) for _ in range(2000)]
+        r = escribir(tmp_path, "a", [
+            meta(), evento("task_started"), evento("task_complete"), *relleno,
+        ])
+        assert codex.leer_estado(r) == "terminado"
 
 
 class TestCabecera:

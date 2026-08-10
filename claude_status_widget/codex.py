@@ -41,15 +41,21 @@ COLA_BYTES = 64 * 1024
 # metadata y las instrucciones del sistema.
 LINEAS_TITULO = 400
 
-# Un turno en marcha escribe en el rollout continuamente (recuentos de
-# tokens, mensajes del agente). Si el archivo lleva mas de esto callado,
-# el turno no sigue vivo: o se cerro el chat, o se paro la generacion, o
-# Codex murio. En ninguno de esos casos llega el `task_complete` que
-# apagaria el verde, asi que hace falta esta salida por silencio.
-INACTIVO_SEGUNDOS = 60
+# Tope de lectura hacia atras buscando el evento de turno. Los rollouts
+# de una sesion larga pasan de 3 MB; mas alla de esto se asume que no
+# hay senal util y no merece la pena seguir leyendo en cada sondeo.
+MAX_LECTURA = 4 * 1024 * 1024
+
+# Si el turno sigue abierto pero el archivo lleva MUCHO tiempo callado,
+# lo mas probable es que el chat se cerrara a medias: nunca llegara el
+# `task_complete` que apaga el verde. El margen es generoso a proposito,
+# porque una herramienta lenta (una compilacion, una bateria de tests)
+# tambien deja el archivo quieto varios minutos sin estar muerta.
+INACTIVO_SEGUNDOS = 15 * 60
 
 TRABAJANDO = "trabajando"
 TERMINADO = "terminado"
+ESPERANDO = "esperando"
 
 _cache: dict = {}
 
@@ -116,28 +122,84 @@ def leer_cabecera(ruta: Path) -> dict:
     return datos
 
 
-def leer_estado(ruta: Path) -> str:
-    """Ultimo evento de turno del archivo: dice si sigue trabajando."""
+def _cola_con_turno(ruta: Path) -> list:
+    """Lineas del final del archivo, hasta encontrar un evento de turno.
+
+    Leer un trozo fijo del final no sirve: un turno largo escribe megas
+    de razonamiento y llamadas a herramientas, y el `task_started` queda
+    muy atras. Si no se encuentra, el estado se daba por terminado
+    estando la sesion en marcha. Por eso se retrocede por bloques hasta
+    dar con la senal, con un tope para no leer archivos enormes enteros.
+    """
     try:
-        with open(ruta, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            inicio = max(0, f.tell() - COLA_BYTES)
-            f.seek(inicio)
-            cola = f.read().decode("utf-8", errors="replace")
+        tam = ruta.stat().st_size
     except OSError:
+        return []
+
+    leido = 0
+    bloque = COLA_BYTES
+    while True:
+        leido = min(tam, max(bloque, leido * 4))
+        try:
+            with open(ruta, "rb") as f:
+                f.seek(tam - leido)
+                lineas = f.read().decode("utf-8", errors="replace").splitlines()
+        except OSError:
+            return []
+        # La primera linea puede venir cortada por la mitad.
+        if leido < tam:
+            lineas = lineas[1:]
+        if any('"task_started"' in l or '"task_complete"' in l for l in lineas):
+            return lineas
+        if leido >= tam or leido >= MAX_LECTURA:
+            return lineas
+
+
+def _pide_permiso(lineas: list) -> bool:
+    """Hay una llamada esperando que el usuario escale privilegios.
+
+    Codex no emite ningun evento de "pidiendo permiso". Lo que hace es
+    dejar la llamada colgada: aparece un `function_call` que pide
+    escalada y no llega su salida hasta que la persona responde.
+    """
+    for linea in reversed(lineas):
+        d = _json(linea)
+        if not d:
+            continue
+        payload = d.get("payload") or {}
+        tipo = payload.get("type")
+        if tipo in ("function_call_output", "custom_tool_call_output"):
+            return False  # la ultima llamada ya se resolvio
+        if tipo in ("function_call", "custom_tool_call"):
+            return "require_escalated" in str(payload.get("arguments", ""))
+    return False
+
+
+def leer_estado(ruta: Path) -> str:
+    """Estado de la sesion segun el ultimo turno escrito.
+
+    Terminado si el ultimo evento de turno fue `task_complete`. Si el
+    turno sigue abierto, esperando cuando hay una llamada pendiente de
+    permiso, y trabajando en cualquier otro caso.
+    """
+    lineas = _cola_con_turno(ruta)
+    if not lineas:
         return TERMINADO
 
-    estado = TERMINADO
-    for linea in cola.splitlines():
+    abierto = False
+    for linea in lineas:
         d = _json(linea)
         if not d or d.get("type") != "event_msg":
             continue
         tipo = (d.get("payload") or {}).get("type")
         if tipo == "task_started":
-            estado = TRABAJANDO
+            abierto = True
         elif tipo == "task_complete":
-            estado = TERMINADO
-    return estado
+            abierto = False
+
+    if not abierto:
+        return TERMINADO
+    return ESPERANDO if _pide_permiso(lineas) else TRABAJANDO
 
 
 def _rollouts_recientes(base: Path, limite: datetime) -> list:
@@ -156,7 +218,12 @@ def _rollouts_recientes(base: Path, limite: datetime) -> list:
 
 def _detalle(origen: str, estado: str) -> str:
     donde = "VS Code" if "vscode" in (origen or "").lower() else "terminal"
-    return f"Codex en {donde}: " + ("trabajando" if estado == TRABAJANDO else "turno terminado")
+    que = {
+        TRABAJANDO: "trabajando",
+        ESPERANDO: "esperando permiso",
+        TERMINADO: "turno terminado",
+    }[estado]
+    return f"Codex en {donde}: {que}"
 
 
 def _inicio(ruta: Path, mtime: datetime) -> str:
@@ -191,6 +258,8 @@ def leer_sesiones(base=None, now=None) -> dict:
         # La caducidad se aplica fuera de la cache: el estado cacheado
         # depende del archivo, pero esto depende del reloj, asi que un
         # turno abandonado se apaga solo aunque nada vuelva a escribirse.
+        # No se toca "esperando": un permiso puede estar pendiente el
+        # rato que tarde la persona en volver a la silla.
         if estado == TRABAJANDO and (now - mtime).total_seconds() > INACTIVO_SEGUNDOS:
             estado = TERMINADO
 
