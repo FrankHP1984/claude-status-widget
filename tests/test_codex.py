@@ -8,7 +8,7 @@ archivo aunque este sea enorme.
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -145,3 +145,39 @@ class TestLeerSesiones:
 
     def test_sin_directorio_no_revienta(self, tmp_path):
         assert codex.leer_sesiones(base=tmp_path / "no-existe") == {}
+
+
+class TestTurnoAbandonado:
+    """El verde tiene que apagarse aunque no llegue `task_complete`.
+
+    Si cierras el chat, paras la generacion o Codex se corta a mitad de
+    turno, ese evento no llega nunca y la fila se quedaba trabajando
+    hasta caducar seis horas despues.
+    """
+
+    def rollout(self, tmp_path, edad_segundos):
+        r = escribir(tmp_path, "2026-08-10T10-00-00-abc", [
+            meta(), evento("user_message", message="hola"), evento("task_started"),
+        ])
+        marca = datetime.now(timezone.utc).timestamp() - edad_segundos
+        os.utime(r, (marca, marca))
+        return r
+
+    def test_turno_reciente_sigue_en_verde(self, tmp_path):
+        self.rollout(tmp_path, edad_segundos=5)
+        entrada = list(codex.leer_sesiones(base=tmp_path).values())[0]
+        assert entrada["state"] == "trabajando"
+
+    def test_turno_callado_se_apaga(self, tmp_path):
+        self.rollout(tmp_path, edad_segundos=codex.INACTIVO_SEGUNDOS + 30)
+        entrada = list(codex.leer_sesiones(base=tmp_path).values())[0]
+        assert entrada["state"] == "terminado"
+
+    def test_la_cache_no_congela_el_verde(self, tmp_path):
+        # Misma lectura dos veces sin que el archivo cambie: la segunda,
+        # con el reloj mas adelantado, tiene que apagarse igual.
+        self.rollout(tmp_path, edad_segundos=5)
+        assert list(codex.leer_sesiones(base=tmp_path).values())[0]["state"] == "trabajando"
+        futuro = datetime.now(timezone.utc) + timedelta(seconds=codex.INACTIVO_SEGUNDOS + 30)
+        entrada = list(codex.leer_sesiones(base=tmp_path, now=futuro).values())[0]
+        assert entrada["state"] == "terminado"

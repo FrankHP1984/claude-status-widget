@@ -41,6 +41,13 @@ COLA_BYTES = 64 * 1024
 # metadata y las instrucciones del sistema.
 LINEAS_TITULO = 400
 
+# Un turno en marcha escribe en el rollout continuamente (recuentos de
+# tokens, mensajes del agente). Si el archivo lleva mas de esto callado,
+# el turno no sigue vivo: o se cerro el chat, o se paro la generacion, o
+# Codex murio. En ninguno de esos casos llega el `task_complete` que
+# apagaria el verde, asi que hace falta esta salida por silencio.
+INACTIVO_SEGUNDOS = 60
+
 TRABAJANDO = "trabajando"
 TERMINADO = "terminado"
 
@@ -180,6 +187,12 @@ def leer_sesiones(base=None, now=None) -> dict:
             cabecera = cacheado["cabecera"] if cacheado else leer_cabecera(ruta)
             estado = leer_estado(ruta)
             _cache[clave] = {"mtime": mtime, "cabecera": cabecera, "estado": estado}
+
+        # La caducidad se aplica fuera de la cache: el estado cacheado
+        # depende del archivo, pero esto depende del reloj, asi que un
+        # turno abandonado se apaga solo aunque nada vuelva a escribirse.
+        if estado == TRABAJANDO and (now - mtime).total_seconds() > INACTIVO_SEGUNDOS:
+            estado = TERMINADO
 
         # El identificador va al final del nombre del archivo.
         ident = ruta.stem[-36:]
