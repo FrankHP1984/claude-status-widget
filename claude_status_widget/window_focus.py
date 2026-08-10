@@ -3,6 +3,7 @@
 Usado por el hook (para averiguar que PID de ventana corresponde a la
 sesion) y por el widget (para traer esa ventana al frente al hacer clic).
 """
+import os
 import time
 
 import psutil
@@ -28,6 +29,57 @@ def _visible_window_pids() -> dict:
 
     win32gui.EnumWindows(handler, None)
     return pid_to_hwnd
+
+
+def elegir_ventana(fragmento: str, ventanas: list):
+    """PID de la ventana que corresponde a un proyecto, o None.
+
+    Las sesiones de Codex no traen ningun PID: viven dentro del editor,
+    no en una terminal propia. Lo unico que las ata a una ventana es el
+    nombre de la carpeta, que los editores ponen en el titulo.
+
+    `ventanas` es una lista de (pid, nombre_proceso, titulo). Se prefiere
+    un editor conocido, porque el mismo nombre de carpeta puede aparecer
+    en un explorador o en esta misma conversacion.
+    """
+    if not fragmento:
+        return None
+    objetivo = fragmento.lower()
+    candidatos = [v for v in ventanas if objetivo in (v[2] or "").lower()]
+    if not candidatos:
+        return None
+    editores = [v for v in candidatos if any(
+        e in (v[1] or "").lower() for e in ("code.exe", "cursor.exe", "windsurf.exe"))]
+    return (editores or candidatos)[0][0]
+
+
+def listar_ventanas() -> list:
+    """Ventanas visibles con titulo: (pid, nombre_proceso, titulo)."""
+    encontradas = []
+
+    def handler(hwnd, _):
+        if not (win32gui.IsWindowVisible(hwnd) and win32gui.GetWindowText(hwnd)):
+            return
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            encontradas.append((pid, psutil.Process(pid).name(), win32gui.GetWindowText(hwnd)))
+        except (psutil.Error, OSError):
+            pass
+
+    try:
+        win32gui.EnumWindows(handler, None)
+    except OSError:
+        pass
+    return encontradas
+
+
+def focus_project_window(cwd: str) -> bool:
+    """Trae al frente la ventana del editor abierto en ese directorio."""
+    if not cwd:
+        return False
+    nombre = os.path.basename(str(cwd).replace("\\", "/").rstrip("/"))
+    pid = elegir_ventana(nombre, listar_ventanas())
+    return focus_pid(pid) if pid else False
 
 
 def find_focusable_ancestor_pid(start_pid: int):

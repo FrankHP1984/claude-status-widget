@@ -481,7 +481,11 @@ class StatusWidget:
 
         focus_pid = entry.get("focus_pid")
         shell_pid = entry.get("shell_pid")
-        clickable = bool(focus_pid)
+        # Codex vive dentro del editor, no en una terminal propia: no
+        # hay PID que enfocar, asi que se busca su ventana por el nombre
+        # del proyecto.
+        proyecto = entry.get("cwd", "") if entry.get("source") == "codex" else ""
+        clickable = bool(focus_pid) or bool(proyecto)
 
         row = tk.Canvas(
             self.rows_frame, width=width, height=ROW_H, bg=BG_PANEL, highlightthickness=0,
@@ -491,7 +495,10 @@ class StatusWidget:
 
         card_id = _round_rect(row, 0, 0, width, ROW_H, 12, fill=BG_CARD, outline="")
         if clickable:
-            handler = lambda e, p=focus_pid, s=shell_pid: self._focus_session(p, s)
+            if proyecto:
+                handler = lambda e, c=proyecto: window_focus.focus_project_window(c)
+            else:
+                handler = lambda e, p=focus_pid, s=shell_pid: self._focus_session(p, s)
             row.tag_bind(card_id, "<Button-1>", handler)
             row.bind("<Button-1>", handler)
             row.bind("<Enter>", lambda e, c=row: c.itemconfig(card_id, fill=BG_CARD_HOVER))
@@ -584,7 +591,14 @@ class StatusWidget:
         # El sonido y el repintado usan ya el estado confirmado, asi que
         # una espera fugaz nunca llega a verse ni a oirse.
         data = state_store.load()
-        data.update(self._codex())
+        for clave, sesion in self._codex().items():
+            # El nombre puesto a mano se guarda en status.json, pero la
+            # sesion se reconstruye del rollout en cada sondeo: sin esto,
+            # el renombrado duraria dos segundos.
+            guardado = data.get(clave) or {}
+            if guardado.get("custom_title"):
+                sesion = dict(sesion, custom_title=guardado["custom_title"])
+            data[clave] = sesion
         visibles = self._confirm_pending(sessions.visible_sessions(data, psutil.pid_exists))
         self._announce_changes(visibles)
 
