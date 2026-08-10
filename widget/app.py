@@ -22,11 +22,16 @@ import winerror
 from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from claude_status_widget import sessions, state_store, window_focus  # noqa: E402
+from claude_status_widget import codex, sessions, state_store, window_focus  # noqa: E402
 
 # Refresco muy corto: solo se relee un JSON pequeño y unicamente se repinta
 # si la huella del contenido cambia, asi que el coste es despreciable.
 REFRESH_MS = 150
+
+# Codex no avisa de nada: hay que mirarle los archivos de sesion. Se
+# hace cada pocos segundos, no en cada refresco, porque implica recorrer
+# un directorio en vez de leer un JSON pequeño.
+CODEX_POLL_MS = 2000
 
 # Un permiso solo se muestra (y suena) si sigue pendiente pasado este
 # tiempo. Los falsos positivos se resuelven solos en ~0,2 s porque la
@@ -231,6 +236,8 @@ class StatusWidget:
         self._last_states = None
         self._last_signature = None
         self._last_pct = None
+        self._codex_cache = {}
+        self._codex_visto = 0.0
         self._pending_since = {}
         self.settings = load_settings()
         saved_pos = self.settings.get("panel_pos")
@@ -556,10 +563,28 @@ class StatusWidget:
             for sid, entry in visibles
         )
 
+    def _codex(self) -> dict:
+        """Sesiones de Codex, releidas como mucho cada CODEX_POLL_MS.
+
+        Codex no tiene hooks, asi que esta es la unica via; se sondea
+        despacio para que el refresco de 150 ms siga siendo gratis.
+        """
+        ahora = time.monotonic()
+        if ahora - self._codex_visto < CODEX_POLL_MS / 1000:
+            return self._codex_cache
+        self._codex_visto = ahora
+        try:
+            self._codex_cache = codex.leer_sesiones()
+        except Exception:
+            # Nunca tumbar el panel por una fuente secundaria.
+            self._codex_cache = {}
+        return self._codex_cache
+
     def _refresh_loop(self):
         # El sonido y el repintado usan ya el estado confirmado, asi que
         # una espera fugaz nunca llega a verse ni a oirse.
         data = state_store.load()
+        data.update(self._codex())
         visibles = self._confirm_pending(sessions.visible_sessions(data, psutil.pid_exists))
         self._announce_changes(visibles)
 
