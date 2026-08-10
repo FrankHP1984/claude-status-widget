@@ -16,10 +16,11 @@ en una fila, salta directamente a la pestaña de terminal correspondiente.
 - **Título real de la conversación** — el primer mensaje que escribiste, no uno intermedio.
 - **Medidor de consumo** — cuánto llevas gastado del límite de uso que se repone cada 5 horas, y cuánto falta para que se reponga, junto a "Sesiones activas". Es el mismo número que da `/usage`.
 - **Modelo y contexto por fila** — cada conversación muestra con qué modelo corre y cuánto ocupa su ventana de contexto.
-- **Clic para saltar** — enfoca la ventana y cambia a la pestaña de Windows Terminal.
+- **Clic para saltar** — enfoca la ventana y cambia a la pestaña de Windows Terminal; en las sesiones de Codex, abre la ventana del editor donde vive esa conversación.
 - **Aviso sonoro opcional** — al terminar una tarea o al quedarse esperando permiso.
 - **Solo conversaciones reales** — las sesiones internas (subagentes, resúmenes) se descartan.
 - **Soporte para OpenCode** — mediante un plugin que escribe en el mismo estado.
+- **Soporte para Codex** — sus conversaciones aparecen igual, tanto las de VS Code como las de terminal, leyendo los archivos de sesión que Codex ya escribe.
 
 ## Requisitos
 
@@ -38,7 +39,9 @@ pip install -r requirements.txt
 
 ### Registrar los hooks
 
-El widget no sondea nada: se alimenta de los hooks de Claude Code. Añade a
+Para Claude Code el widget no sondea nada: se alimenta de sus hooks. (La excepción es
+Codex, que no tiene hooks y obliga a mirar sus archivos de sesión; se explica más abajo.)
+Añade a
 `%USERPROFILE%\.claude\settings.json` una entrada por cada evento, apuntando a
 `hooks/notify_status.py` con la ruta donde hayas clonado el repositorio:
 
@@ -220,6 +223,32 @@ pestaña se deduce ordenando los shells hijos por hora de creación, y se envía
 - **La predicción de permisos no replica la lógica interna de Claude Code.** No cubre con
   exactitud todos los modos, los "permitir siempre" ni las herramientas MCP. Por eso es
   conservadora.
+- **Las sesiones de Codex nunca se ponen en ámbar.** Codex no emite ninguna señal de
+  permiso pendiente por ningún canal, así que ese estado no existe para sus filas.
+- **El salto a la ventana de Codex se basa en el título.** Se busca la ventana cuyo título
+  contenga el nombre de la carpeta del proyecto, prefiriendo un editor conocido. Con dos
+  editores abiertos en carpetas del mismo nombre, puede ir a la equivocada.
+
+## Codex
+
+Codex no ofrece hooks. Su único enganche, `notify`, admite **un solo comando** y suele
+estar ya ocupado —en una instalación con computer-use lo usa el propio Codex—, así que
+pisarlo rompería funcionalidad ajena. En cambio, Codex escribe cada conversación en
+`~/.codex/sessions/AAAA/MM/DD/rollout-*.jsonl`, y eso sí se puede leer sin molestar.
+
+De ahí salen el estado de turno (`task_started` / `task_complete`), el directorio del
+proyecto, el título del primer mensaje humano y si la sesión vive en VS Code o en una
+terminal. No hace falta configurar nada: si usas Codex, sus conversaciones aparecen solas.
+
+Esto obliga a sondear, que es la excepción al "no sondea nada" de más arriba. Se paga
+barato: solo se miran los rollouts recientes, cada dos segundos en lugar de en cada
+refresco, cacheando por fecha de modificación y leyendo únicamente la cola de unos
+archivos que llegan a pesar varios megas.
+
+Codex abre un rollout propio por cada **subagente** que lanza, idéntico en apariencia a una
+conversación tuya. Se distinguen por `thread_source`: `user` es lo que escribiste tú,
+`subagent` lo abrió el agente por su cuenta. Sin ese filtro verías tres o cuatro filas
+teniendo una sola sesión abierta.
 
 ## OpenCode
 

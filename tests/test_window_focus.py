@@ -39,3 +39,27 @@ class TestElegirVentana:
 
     def test_tolera_titulos_vacios(self):
         assert window_focus.elegir_ventana("x", [(1, "a.exe", None)]) is None
+
+
+class TestFocusProjectWindow:
+    """Recorre la funcion entera, no solo la decision.
+
+    Existe por un fallo real: faltaba `import os` y la funcion reventaba
+    con NameError en el primer clic. Los tests de `elegir_ventana` no lo
+    vieron porque nunca la ejecutaban. Aqui se recorre el camino
+    completo contra un proyecto que no existe: sin abrir ninguna
+    ventana, cualquier error de nombre o de import salta.
+    """
+
+    def test_proyecto_inexistente_devuelve_false(self):
+        assert window_focus.focus_project_window(
+            "C:/proyectos/carpeta-que-no-existe-jamas-9f3a") is False
+
+    def test_cwd_vacio_devuelve_false(self):
+        assert window_focus.focus_project_window("") is False
+
+    def test_barra_final_no_deja_el_nombre_vacio(self):
+        # basename("c:/x/proyecto/") es "" si no se limpia la barra, y
+        # entonces buscaria con un fragmento vacio.
+        assert window_focus.focus_project_window(
+            "C:/proyectos/carpeta-que-no-existe-jamas-9f3a/") is False
